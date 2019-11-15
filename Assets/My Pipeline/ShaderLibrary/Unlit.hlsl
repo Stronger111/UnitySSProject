@@ -8,6 +8,7 @@ CBUFFER_END
 
 CBUFFER_START(UnityPerDraw)
   float4x4 unity_ObjectToWorld;
+
 CBUFFER_END
 
 #define UNITY_MATRIX_M unity_ObjectToWorld
