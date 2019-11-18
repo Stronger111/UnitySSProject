@@ -4,8 +4,15 @@ using UnityEngine.Rendering;
 using Conditional = System.Diagnostics.ConditionalAttribute;  //规定在编辑器模式下启作用
 public class MyPipeline : RenderPipeline
 {
+    #region 配置信息
+    /// <summary>
+    /// 阴影贴图大小
+    /// </summary>
+    int shadowMapSize;
+    #endregion
     CommandBuffer cameraBuffer = new CommandBuffer { name = "Render Camera" };
 
+    CommandBuffer shadowBuffer = new CommandBuffer { name = "Render Shadows" };
     CullResults cull;
 
     Material errorMaterial;
@@ -30,6 +37,10 @@ public class MyPipeline : RenderPipeline
     /// 聚光灯方向
     /// </summary>
     static int visibleLightSpotDirectionsId = Shader.PropertyToID("_VisibleLightSpotDirections");
+    /// <summary>
+    /// Unity灯光索引的数量
+    /// </summary>
+    static int lightIndicesOffsetAndCountID = Shader.PropertyToID("unity_LightIndicesOffsetAndCount");
 
     Vector4[] visibleLightColors = new Vector4[maxVisibleLights];
     Vector4[] visibleLightDirectionsOrPositions = new Vector4[maxVisibleLights];
@@ -39,7 +50,22 @@ public class MyPipeline : RenderPipeline
     #region 距离衰减  衰减范围
 
     #endregion
-    public MyPipeline(bool dynamicBatching, bool instanceing)
+    #region 阴影贴图
+    RenderTexture shadowMap;
+    static int shadowMapId = Shader.PropertyToID("_ShadowMap");
+    /// <summary>
+    /// 0.05和0.01。
+    /// </summary>
+    static int shadowBiasId = Shader.PropertyToID("_ShadowBias");
+    static int shadowStrengthId = Shader.PropertyToID("_ShadowStrength");
+    /// <summary>
+    /// 世界空间到阴影裁剪空间
+    /// </summary>
+    static int worldToShadowMatrixId = Shader.PropertyToID("_WorldToShadowMatrix");
+    static int shadowMapSizeId = Shader.PropertyToID("_ShadowMapSize");
+    const string shadowSoftKeyword = "_SHADOWS_SOFT";
+    #endregion
+    public MyPipeline(bool dynamicBatching, bool instanceing,int shadowMapSize)
     {
         GraphicsSettings.lightsUseLinearIntensity = true;
         if (dynamicBatching)
@@ -47,6 +73,7 @@ public class MyPipeline : RenderPipeline
 
         if (instanceing)
             drawFlags |= DrawRendererFlags.EnableInstancing;
+        this.shadowMapSize = shadowMapSize;
     }
     public override void Render(ScriptableRenderContext renderContext, Camera[] cameras)
     {
@@ -57,6 +84,7 @@ public class MyPipeline : RenderPipeline
             Render(renderContext, camera);
         }
     }
+
 
     void Render(ScriptableRenderContext context, Camera camera)
     {
@@ -73,6 +101,8 @@ public class MyPipeline : RenderPipeline
 #endif
 
         CullResults.Cull(ref cullingParameters, context, ref cull);
+        //开始渲染阴影图
+        RenderShadows(context);
         //正确设置渲染物体的VP矩阵 unity_MatrixVP
         context.SetupCameraProperties(camera);
 
@@ -83,8 +113,15 @@ public class MyPipeline : RenderPipeline
             (clearFlags & CameraClearFlags.Color) != 0,
             camera.backgroundColor
             );
-        //配置灯光
-        ConfigureLights();
+        if (cull.visibleLights.Count > 0)
+        {
+            //配置灯光
+            ConfigureLights();
+        }
+        else
+        {
+            cameraBuffer.SetGlobalVector(lightIndicesOffsetAndCountID, Vector4.zero); //还原数据
+        }
         cameraBuffer.BeginSample("Render Camera");
 
         cameraBuffer.SetGlobalVectorArray(visibleLightColorsId, visibleLightColors);
@@ -98,9 +135,12 @@ public class MyPipeline : RenderPipeline
         var drawSettings = new DrawRendererSettings(camera, new ShaderPassName("SRPDefaultUnlit"))
         {
             flags = drawFlags,
-            rendererConfiguration = RendererConfiguration.PerObjectLightIndices8
+            //rendererConfiguration = RendererConfiguration.PerObjectLightIndices8
         };
-
+        if (cull.visibleLights.Count > 0)
+        {
+            drawSettings.rendererConfiguration = RendererConfiguration.PerObjectLightIndices8;
+        }
         drawSettings.sorting.flags = SortFlags.CommonOpaque;
         //先画不透明物体
         var filterSettings = new FilterRenderersSettings(true)
@@ -121,6 +161,11 @@ public class MyPipeline : RenderPipeline
         cameraBuffer.Clear();
 
         context.Submit();
+        if (shadowMap)
+        {
+            RenderTexture.ReleaseTemporary(shadowMap);
+            shadowMap = null;
+        }
     }
 
     [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
@@ -190,10 +235,67 @@ public class MyPipeline : RenderPipeline
             }
             visibleLightColors[i] = light.finalColor;
             visibleLightAttenuations[i] = attenuation;
+
         }
         //for (; i < maxVisibleLights; i++)   //还原清除后面灯光颜色(0,0,0,0)
         //{
         //    visibleLightColors[i] = Color.clear;
         //}
+        //告诉Unity 超出最大灯光数量的索引设置为-1使其不起作用
+        if (cull.visibleLights.Count > maxVisibleLights)
+        {
+            int[] lightIndices = cull.GetLightIndexMap();
+            for (int i = maxVisibleLights; i < cull.visibleLights.Count; i++)
+            {
+                lightIndices[i] = -1;
+            }
+            cull.SetLightIndexMap(lightIndices);
+        }
+    }
+
+    void RenderShadows(ScriptableRenderContext context)
+    {
+        shadowMap = RenderTexture.GetTemporary(shadowMapSize, shadowMapSize, 16, RenderTextureFormat.Shadowmap);
+        shadowMap.filterMode = FilterMode.Bilinear;  //双线性过滤
+        shadowMap.wrapMode = TextureWrapMode.Clamp;  //限制最后一个像素
+
+        CoreUtils.SetRenderTarget(shadowBuffer, shadowMap, RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store, ClearFlag.Depth);
+        shadowBuffer.BeginSample("Render Shadows");
+        context.ExecuteCommandBuffer(shadowBuffer);
+        shadowBuffer.Clear();
+        //V P矩阵
+        Matrix4x4 viewMatrix, projectionMatrix;
+        ShadowSplitData splitData;
+        cull.ComputeSpotShadowMatricesAndCullingPrimitives(0, out viewMatrix, out projectionMatrix, out splitData);
+        shadowBuffer.SetViewProjectionMatrices(viewMatrix, projectionMatrix);
+        shadowBuffer.SetGlobalFloat(shadowBiasId,cull.visibleLights[0].light.shadowBias);
+        context.ExecuteCommandBuffer(shadowBuffer);
+        shadowBuffer.Clear();
+
+        var shadowSettings = new DrawShadowsSettings(cull, 0);
+        context.DrawShadows(ref shadowSettings);
+        if (SystemInfo.usesReversedZBuffer)
+        {
+            projectionMatrix.m20 = -projectionMatrix.m20;
+            projectionMatrix.m21 = -projectionMatrix.m21;
+            projectionMatrix.m22 = -projectionMatrix.m22;
+            projectionMatrix.m23 = -projectionMatrix.m23;
+        }
+        var scaleOffset = Matrix4x4.TRS(Vector3.one * 0.5f, Quaternion.identity, Vector3.one * 0.5f);
+        // var scaleOffset=Matrix4x4.identity
+        //scaleOffset.m00 = scaleOffset.m11 = scaleOffset.m22 = 0.5f;
+        //scaleOffset.m03 = scaleOffset.m13 = scaleOffset.m23 = 0.5f;
+        Matrix4x4 worldShadowMatrix = scaleOffset*(projectionMatrix * viewMatrix);
+        shadowBuffer.SetGlobalMatrix(worldToShadowMatrixId, worldShadowMatrix);
+        shadowBuffer.SetGlobalTexture(shadowMapId, shadowMap);
+        shadowBuffer.SetGlobalFloat(shadowStrengthId,cull.visibleLights[0].light.shadowStrength);
+        float invShadowMapSize = 1 / shadowMapSize;
+        shadowBuffer.SetGlobalVector(shadowMapSizeId,new Vector4(invShadowMapSize,invShadowMapSize,shadowMapSizeId,shadowMapSizeId));
+
+        CoreUtils.SetKeyword(shadowBuffer,shadowSoftKeyword,cull.visibleLights[0].light.shadows==LightShadows.Soft);
+
+        shadowBuffer.EndSample("Render Shadows");
+        context.ExecuteCommandBuffer(shadowBuffer);
+        shadowBuffer.Clear();
     }
 }
