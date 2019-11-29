@@ -4,6 +4,10 @@
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Shadow/ShadowSamplingTent.hlsl"
 
+CBUFFER_START(UnityPerCamera)
+  float3 _WorldSpaceCameraPos;
+CBUFFER_END
+
 CBUFFER_START(UnityPerFrame)   //逐帧
 float4x4 unity_MatrixVP;
 CBUFFER_END
@@ -27,10 +31,12 @@ float4 _VisibleLightSpotDirections[MAX_VISIBLE_LIGHTS];
 CBUFFER_END
 
 CBUFFER_START(_ShadowBuffer)
-
-float4x4 _WorldToShadowMatrix;
-float _ShadowStrength;
-float4 _ShadowMapSize;
+  //float4x4 _WorldToShadowMatrix;
+  //float _ShadowStrength;
+  float4x4 _WorldToShadowMatrices[MAX_VISIBLE_LIGHTS];
+  float4 _ShadowData[MAX_VISIBLE_LIGHTS];
+  float4 _ShadowMapSize;
+  float4 _GlobalShadowData;
 CBUFFER_END
 
 TEXTURE2D_SHADOW(_ShadowMap);
@@ -60,22 +66,57 @@ struct VertexOutput
    UNITY_VERTEX_INPUT_INSTANCE_ID
 };
 
-float ShadowAttenuation(float3 worldPos)
+float DistanceToCameraSqr(float3 worldPos)
 {
-    float4 shadowPos = mul(_WorldToShadowMatrix, float4(worldPos, 1.0));
-    shadowPos.xyz /= shadowPos.w;
-    float attenuation = SAMPLE_TEXTURE2D_SHADOW(_ShadowMap, sampler_ShadowMap, shadowPos.xyz);
-#if defined(_SHADOWS_SOFT)
-	  real tentWeights[9];
+  float3 cameraToFragment=worldPos-_WorldSpaceCameraPos;
+  return dot(cameraToFragment,cameraToFragment);
+}
+
+float HardShadowAttenuation(float4 shadowPos)
+{
+  return SAMPLE_TEXTURE2D_SHADOW(_ShadowMap, sampler_ShadowMap, shadowPos.xyz);
+}
+
+float SoftShadowAttenuation(float4 shadowPos)
+{
+      real tentWeights[9];
 	  real2 tentUVs[9];
 	  SampleShadow_ComputeSamples_Tent_5x5(_ShadowMapSize,shadowPos.xy,tentWeights,tentUVs);
-	  attenuation=0;
-	  for(int int=0;i<9;i++)
+	  float  attenuation=0;
+	  for(int i=0;i<9;i++)
 	 {
-	   attenuation+=tentWeights[i]*SAMPLE_TEXTURE2D_SHADOW(_ShadowMap,sampler_ShadowMap,float3(tentUVs[i].xy,shadowPos));
+	   attenuation+=tentWeights[i]*SAMPLE_TEXTURE2D_SHADOW(_ShadowMap,sampler_ShadowMap,float3(tentUVs[i].xy,shadowPos.z));
 	 }
-#endif
-    return lerp(1, attenuation, _ShadowStrength);
+     return attenuation;
+}
+
+float ShadowAttenuation(int index,float3 worldPos)
+{
+    #if !defined(_SHADOWS_HARD) && !defined(_SHADOWS_SOFT)
+       return 1.0;
+    #endif
+    if(_ShadowData[index].x<=0 || DistanceToCameraSqr(worldPos)>_GlobalShadowData.y){
+        return 1.0;
+    }
+    float4 shadowPos = mul(_WorldToShadowMatrices[index], float4(worldPos, 1.0));
+    shadowPos.xyz /= shadowPos.w;
+    shadowPos.xy=saturate(shadowPos.xy);
+    shadowPos.xy=shadowPos.xy*_GlobalShadowData.x+_ShadowData[index].zw;
+    float attenuation ;
+    #if defined(_SHADOWS_HARD)
+      #if defined(_SHADOWS_SOFT)
+    if(_ShadowData[index].y==0){   //标识为硬阴影 1为软阴影
+       attenuation =HardShadowAttenuation(shadowPos);
+    }else{
+	 attenuation=SoftShadowAttenuation(shadowPos);
+    }
+      #else
+       attenuation =HardShadowAttenuation(shadowPos);
+      #endif
+    #else
+       attenuation=SoftShadowAttenuation(shadowPos);
+    #endif
+    return lerp(1, attenuation, _ShadowData[index].x);  //存取灯光强度
 }
 
 float3 DiffuseLight
@@ -136,7 +177,7 @@ float4 LitPassFragment
     for (int i = 0; i < min(unity_LightIndicesOffsetAndCount.y, 4); i++)
     {
         int lightIndex = unity_4LightIndices0[i];
-        float shadowAttenuation = ShadowAttenuation(input.worldPos);
+        float shadowAttenuation = ShadowAttenuation(lightIndex,input.worldPos);
         diffuseLight += DiffuseLight(lightIndex, input.normal, input.worldPos, shadowAttenuation);
     }
    

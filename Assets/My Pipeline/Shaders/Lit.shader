@@ -13,6 +13,9 @@
             //GPU instanceing
             #pragma multi_compile_instancing
             #pragma instancing_options assumeuniformscaling
+            
+            #pragma multi_compile _ _SHADOWS_HARD
+            #pragma multi_compile _ _SHADOWS_SOFT
 
             #pragma vertex LitPassVertex
             #pragma fragment LitPassFragment
@@ -30,7 +33,8 @@
             #pragma multi_compile_instancing
             #pragma instancing_options assumeuniformscaling
 
-			#pragma multi_compile _ _SHADOWS_SOFT
+			// #pragma multi_compile _ _SHADOWS_HARD
+            // #pragma multi_compile _ _SHADOWS_SOFT
 
             #pragma vertex ShadowCasterPassVertex
             #pragma fragment ShadowCasterPassFragment
