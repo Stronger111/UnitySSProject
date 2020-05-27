@@ -20,6 +20,14 @@ public class MyPipelineAsset : RenderPipelineAsset
         Two=2,
         Four=4
     }
+
+    public enum MSAAMode
+    {
+        Off=1,
+        _2x=2,
+        _4x=4,
+        _8x=8
+    }
     [SerializeField]
     ShadowMapSize shadowMapSize=ShadowMapSize._1024;
     [SerializeField]
@@ -34,7 +42,30 @@ public class MyPipelineAsset : RenderPipelineAsset
     bool dynamicBatching;
     [SerializeField]
     bool instanceing;
-
+    [SerializeField,Range(0.25f, 2f)]
+    float renderScale = 1f;
+    [SerializeField]
+    MSAAMode MSAA = MSAAMode.Off;
+    [SerializeField]
+    bool allowHDR;
+    [SerializeField]
+    Texture2D ditherTexture = null;
+    [SerializeField, Range(0f, 120f)]
+    float ditherAnimationSpeed = 30f;
+    [SerializeField,Range(0.01f,2f)] //阴影距离
+    float shadowFadeRange = 1f;
+    [SerializeField]
+    bool supportLODCrossFading = true;
+    [SerializeField]
+    MyPostProcessingStack defaultStack;
+    public bool HasShadowCascades
+    {
+        get { return shadowCascades != ShadowCascades.Zero; }
+    }
+    public bool HasLODCrossFading
+    {
+        get { return supportLODCrossFading;}
+    }
     /// <summary>
     /// 创建Asset资源
     /// </summary>
@@ -42,6 +73,6 @@ public class MyPipelineAsset : RenderPipelineAsset
     protected override IRenderPipeline InternalCreatePipeline()
     {
         Vector3 shadowCascadesSplit = shadowCascades == ShadowCascades.Four ? fourCasadesSplit : new Vector3(twoCasadesSplit,0f);
-        return new MyPipeline(dynamicBatching, instanceing,(int)shadowMapSize, shadowDistance,(int)shadowCascades, shadowCascadesSplit);
+        return new MyPipeline(dynamicBatching, instanceing, defaultStack,ditherTexture, ditherAnimationSpeed,(int)shadowMapSize, shadowDistance, shadowFadeRange,(int)shadowCascades, shadowCascadesSplit, renderScale, (int)MSAA, allowHDR);
     }
 }

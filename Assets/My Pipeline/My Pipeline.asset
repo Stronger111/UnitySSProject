@@ -13,9 +13,17 @@ MonoBehaviour:
   m_Name: My Pipeline
   m_EditorClassIdentifier: 
   shadowMapSize: 4096
-  shadowDistance: 15
+  shadowDistance: 11.1
   shadowCascades: 4
   twoCasadesSplit: 0.25
-  fourCasadesSplit: {x: 0.067, y: 0.2, z: 0.467}
+  fourCasadesSplit: {x: 0.0852648, y: 0.088127814, z: 0.46700016}
   dynamicBatching: 0
   instanceing: 1
+  renderScale: 1
+  MSAA: 8
+  allowHDR: 0
+  ditherTexture: {fileID: 2800000, guid: 25da324c3ac2a1049b4bfb426074be41, type: 3}
+  ditherAnimationSpeed: 4.6
+  shadowFadeRange: 0.01
+  supportLODCrossFading: 1
+  defaultStack: {fileID: 11400000, guid: 3044e5f9a728cfe419cfc68df49a97a3, type: 2}
